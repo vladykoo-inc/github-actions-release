@@ -1,0 +1,62 @@
+# https://github.com/pascalgn/automerge-action
+
+name: automerge
+on:
+  pull_request_review:
+    types:
+      - submitted
+  check_suite:
+    types:
+      - completed
+  status: {}
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+  automerge:
+    runs-on: ubuntu-latest
+    if: ${{ (startsWith(github.event.pull_request.head.ref, 'release/') || startsWith(github.event.pull_request.head.ref, 'hotfix/')) && github.event.pull_request.base.ref == 'prod' }}
+    steps:
+      - id: automerge-prod
+        name: automerge-prod
+        uses: 'pascalgn/automerge-action@v0.15.3'
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          MERGE_DELETE_BRANCH: true
+          MERGE_LABELS: ''
+          MERGE_METHOD: 'merge'
+  sync:
+    runs-on: ubuntu-latest
+    needs: [automerge]
+    if: ${{ (startsWith(github.event.pull_request.head.ref, 'release/') || startsWith(github.event.pull_request.head.ref, 'hotfix/')) && github.event.pull_request.base.ref == 'prod' }}
+    steps:
+      - name: Get release version
+        run: echo "RELEASE=${{ github.event.pull_request.head.ref }}" >> $GITHUB_ENV
+      - uses: actions/checkout@v3
+        with:
+          ref: dev
+      - name: Reset prod branch
+        if: ${{ success() }}
+        run: |
+          git fetch origin prod:prod
+          git reset --hard prod
+      - name: Create Pull Request
+        id: create-pull-request
+        if: ${{ success() }}
+        uses: peter-evans/create-pull-request@v4
+        with:
+          branch: sync-dev-with-prod-${{ env.RELEASE }}
+          token: ${{ secrets.PAT }}
+          title: '${{ env.RELEASE }} Sync dev with prod'
+          labels: |
+            automated PR
+      - name: Merge Pull Request
+        if: steps.create-pull-request.outputs.pull-request-operation == 'created'
+        uses: juliangruber/merge-pull-request-action@v1
+        with:
+          github-token: ${{ secrets.PAT }}
+          number: ${{ steps.create-pull-request.outputs.pull-request-number }}
